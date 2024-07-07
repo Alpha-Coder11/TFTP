@@ -47,8 +47,9 @@ void handle_rrq(int sockfd, struct sockaddr_in * client_addr, socklen_t len, con
     char buffer[BUFFER_SIZE];
     struct timeval tv;
     fd_set read_fds;
+    
     // Send the file contents in blocks
-    while ((n = fread(buffer + 4, 1, BLOCK_SIZE, fp)) > 0) 
+    while ( (n = fread(buffer + 4, 1, BLOCK_SIZE, fp)) > 0 ) 
     {
         buffer[0] = 0;
         buffer[1] = DATA;
@@ -91,6 +92,40 @@ void handle_rrq(int sockfd, struct sockaddr_in * client_addr, socklen_t len, con
     fclose(fp);
 }
 
+void handle_wrq(int sockfd, struct sockaddr_in *client_addr, socklen_t len, const char* filename) 
+{
+    FILE *fp = fopen(filename, "w");
+    if (fp == NULL) {perror("Failed to open file for writing");
+    exit(EXIT_FAILURE);
+    }
+    int block = 0;
+    char buffer[BUFFER_SIZE];
+    // Send ACK for block 0
+    send_ack(sockfd, client_addr, len, block);
+
+    do 
+    {
+        // Receive data block
+        int n = recvfrom(sockfd, buffer, BUFFER_SIZE,
+        0, (struct sockaddr *) client_addr, &len);
+        if (n < 0) 
+        {
+            perror("recvfrom failed");
+            fclose(fp);
+            return;
+        }
+        if (buffer[1] == DATA && (buffer[2] << 8 | buffer[3]) == block + 1) 
+        {
+            fwrite(buffer + 4, 1, n - 4, fp); // Write data to file
+            block++;
+            send_ack(sockfd, client_addr, len, block); // Send ACK for this block
+        }
+    }
+    while (buffer[1] == DATA && (n - 4) == BLOCK_SIZE);
+
+    fclose(fp);
+}
+
 int main() 
 {
     int sockfd;
@@ -107,12 +142,14 @@ int main()
     servaddr.sin_family = AF_INET;
     servaddr.sin_addr.s_addr = INADDR_ANY;
     servaddr.sin_port = htons(PORT);
+
     // Bind the socket with the server address
     if (bind(sockfd, (const struct sockaddr *) & servaddr, sizeof(servaddr)) < 0) 
     {
       perror("bind failed");
       exit(EXIT_FAILURE);
     }
+
     while (1) 
     {
         printf("Waiting for RRQ...\n");
@@ -131,6 +168,12 @@ int main()
             // Extract filename and mode
             char * filename = buffer + 2;
             handle_rrq(sockfd, & cliaddr, len, filename);
+        }
+        else if (buffer[1] == WRQ)
+        {
+            char* filename = buffer + 2;
+            printf("WRQ received for file: %s\n", filename);
+            handle_wrq(sockfd, &cliaddr, len, filename);
         }
     }
     // Close the socket
